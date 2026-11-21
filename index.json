@@ -1,0 +1,32 @@
+{
+  "repository": "Cybersecurity",
+  "owner": "lilnawa",
+  "command": "secguard",
+  "skills": [
+    {
+      "id": "web-header-tls-audit",
+      "file": "skills/web-header-tls-audit.md",
+      "script": "scanners/web/web_audit.py"
+    },
+    {
+      "id": "network-drift-monitoring",
+      "file": "skills/network-drift-monitoring.md",
+      "script": "scanners/net/net_audit.py"
+    },
+    {
+      "id": "log-anomaly-triage",
+      "file": "skills/log-anomaly-triage.md",
+      "script": "monitors/logs/log_guard.py"
+    },
+    {
+      "id": "file-integrity-baseline",
+      "file": "skills/file-integrity-baseline.md",
+      "script": "monitors/integrity/file_guard.py"
+    },
+    {
+      "id": "android-workspace-guard",
+      "file": "skills/android-workspace-guard.md",
+      "script": "monitors/android/android_guard.py"
+    }
+  ]
+}
