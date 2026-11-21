@@ -17,10 +17,18 @@ def speak_text(text: str):
     clean = text.replace('"', " ").replace("'", " ")[:300]
     if shutil.which("termux-tts-speak"):
         subprocess.run(["termux-tts-speak", clean], check=False)
-    elif shutil.which("espeak-ng"):
-        subprocess.run(["espeak-ng", clean], check=False)
-    elif shutil.which("espeak"):
-        subprocess.run(["espeak", clean], check=False)
+        return
+    tts_bin = shutil.which("espeak-ng") or shutil.which("espeak")
+    if tts_bin:
+        os.makedirs("reports", exist_ok=True)
+        wav_path = os.path.join("reports", "alemaz_voice.wav")
+        subprocess.run(
+            [tts_bin, "-w", wav_path, clean],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        print(f"[Voice WAV] {wav_path}")
 
 
 def latest_json(pattern: str) -> dict | None:
