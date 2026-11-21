@@ -7,6 +7,7 @@ MODULES = {
     "log": ["python3", "monitors/logs/log_guard.py"],
     "integrity": ["python3", "monitors/integrity/file_guard.py"],
     "android": ["python3", "monitors/android/android_guard.py"],
+    "report": ["python3", "tools/report_summary.py"],
 }
 
 
@@ -17,11 +18,12 @@ def show_menu():
     print("  log       -> Analyze logs for auth fails, floods & probes")
     print("  integrity -> SHA-256 directory integrity monitor")
     print("  android   -> Workspace permission & secret-pattern check")
+    print("  report    -> Summarize latest reports from reports/")
     print("\nUsage:")
     print("  python3 cyber_toolkit.py <module> [args...]")
     print("Example:")
     print("  python3 cyber_toolkit.py web https://example.com")
-    print("  python3 cyber_toolkit.py android .")
+    print("  python3 cyber_toolkit.py report")
     print("=======================================================\n")
 
 
