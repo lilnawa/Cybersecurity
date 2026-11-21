@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -e
+cd /root/Cybersecurity
+exec python3 cyber_toolkit.py "$@"
