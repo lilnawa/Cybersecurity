@@ -1,20 +1,41 @@
+"""SHA-256 directory integrity baseline and drift detection."""
+
+from __future__ import annotations
+
+import argparse
 import hashlib
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from pathlib import Path
+
+_REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "common.py").is_file()),
+    Path(__file__).resolve().parent,
+)
+sys.path.insert(0, str(_REPO_ROOT))
+
+from common import (  # noqa: E402
+    add_json_arg,
+    add_output_dir_arg,
+    build_report,
+    load_json_file,
+    print_error,
+    resolve_output_dir,
+    save_report as write_report,
+)
 
 
 def sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def snapshot_directory(target_dir: str) -> dict[str, str]:
-    hashes = {}
+    hashes: dict[str, str] = {}
     for root, _, files in os.walk(target_dir):
         for fname in sorted(files):
             full_path = os.path.join(root, fname)
@@ -26,17 +47,26 @@ def snapshot_directory(target_dir: str) -> dict[str, str]:
     return hashes
 
 
-def load_latest_snapshot(output_dir: str = "reports") -> dict | None:
-    if not os.path.isdir(output_dir):
+def load_latest_snapshot(
+    target_dir: str | None = None,
+    output_dir: str | None = None,
+) -> dict | None:
+    """Load the most recent baseline, optionally restricted to one directory."""
+    directory = resolve_output_dir(output_dir)
+    if not directory.is_dir():
         return None
-    files = sorted(
-        f for f in os.listdir(output_dir)
-        if f.startswith("integrity_") and f.endswith(".json")
+    candidates = sorted(
+        path for path in directory.iterdir()
+        if path.name.startswith("integrity_") and path.suffix == ".json"
     )
-    if not files:
-        return None
-    with open(os.path.join(output_dir, files[-1]), "r", encoding="utf-8") as f:
-        return json.load(f)
+    wanted = os.path.abspath(target_dir) if target_dir else None
+    for path in reversed(candidates):
+        record = load_json_file(path)
+        if record is None:
+            continue
+        if wanted is None or record.get("target_dir") == wanted:
+            return record
+    return None
 
 
 def compare_snapshots(old: dict[str, str], new: dict[str, str]) -> dict:
@@ -46,16 +76,11 @@ def compare_snapshots(old: dict[str, str], new: dict[str, str]) -> dict:
     return {"added": added, "removed": removed, "modified": modified}
 
 
-def save_snapshot(record: dict, output_dir: str = "reports") -> str:
-    os.makedirs(output_dir, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(output_dir, f"integrity_{stamp}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, indent=2)
-    return path
+def save_snapshot(record: dict, output_dir: str | None = None) -> str:
+    return write_report(record, output_dir, prefix="integrity")
 
 
-def print_report(target_dir: str, changes: dict, has_baseline: bool, report_path: str):
+def print_report(target_dir: str, changes: dict, has_baseline: bool, report_path: str) -> None:
     print("\n================ FILE INTEGRITY GUARD ================")
     print(f"Directory : {os.path.abspath(target_dir)}")
     if not has_baseline:
@@ -68,31 +93,59 @@ def print_report(target_dir: str, changes: dict, has_baseline: bool, report_path
     print("======================================================\n")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 file_guard.py <directory_path>")
-        sys.exit(1)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="file_guard.py",
+        description="Hash a directory with SHA-256 and detect added, modified or removed files.",
+        epilog="Example: python3 file_guard.py /etc",
+    )
+    parser.add_argument("directory", help="directory to snapshot")
+    add_output_dir_arg(parser)
+    add_json_arg(parser)
+    return parser
 
-    target_dir = sys.argv[1]
-    if not os.path.isdir(target_dir):
-        print(f"[ERROR] Directory not found: {target_dir}")
-        sys.exit(1)
 
-    current_hashes = snapshot_directory(target_dir)
-    prev_record = load_latest_snapshot()
-    has_baseline = prev_record is not None
-    prev_hashes = prev_record.get("files", {}) if prev_record else {}
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    target_dir = Path(args.directory).expanduser()
+    if not target_dir.is_dir():
+        print_error(f"directory not found: {target_dir}")
+        return 1
 
-    changes = compare_snapshots(prev_hashes, current_hashes)
-    record = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "target_dir": os.path.abspath(target_dir),
-        "files": current_hashes,
-        "changes": changes,
-    }
-    report_path = save_snapshot(record)
-    print_report(target_dir, changes, has_baseline, report_path)
+    try:
+        current_hashes = snapshot_directory(str(target_dir))
+        previous = load_latest_snapshot(str(target_dir), args.output_dir)
+        has_baseline = previous is not None
+        changes = compare_snapshots(previous.get("files", {}) if previous else {}, current_hashes)
+
+        if not has_baseline:
+            summary = f"Baseline recorded for {len(current_hashes)} file(s) in {target_dir}"
+            changes = {"added": [], "removed": [], "modified": []}
+        else:
+            total = sum(len(items) for items in changes.values())
+            summary = (
+                "No changes detected" if total == 0 else f"{total} change(s) detected"
+            ) + f" across {len(current_hashes)} file(s) in {target_dir}"
+
+        record = build_report(
+            "file_guard",
+            summary=summary,
+            target_dir=str(target_dir.resolve()),
+            is_baseline=not has_baseline,
+            files=current_hashes,
+            changes=changes,
+        )
+        report_path = save_snapshot(record, args.output_dir)
+    except OSError as exc:
+        print_error(f"could not process directory: {exc}")
+        return 1
+
+    if args.json:
+        print(json.dumps(record, indent=2))
+    else:
+        print_report(args.directory, changes, has_baseline, report_path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

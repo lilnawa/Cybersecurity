@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
-set -e
-cd /root/Cybersecurity
-exec python3 cyber_toolkit.py "$@"
+# Thin, portable launcher for the Cybersecurity Toolkit.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_BIN="${PYTHON:-python3}"
+
+# exec replaces this shell so the module's exit code is propagated unchanged.
+exec "$PYTHON_BIN" "$SCRIPT_DIR/cyber_toolkit.py" "$@"

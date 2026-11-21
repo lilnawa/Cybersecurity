@@ -1,7 +1,25 @@
+"""Generate defensive incident-response and hardening checklists."""
+
+from __future__ import annotations
+
+import argparse
 import json
-import os
 import sys
-from datetime import datetime, timezone
+from pathlib import Path
+
+_REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "common.py").is_file()),
+    Path(__file__).resolve().parent,
+)
+sys.path.insert(0, str(_REPO_ROOT))
+
+from common import (  # noqa: E402
+    add_json_arg,
+    add_output_dir_arg,
+    build_report,
+    print_error,
+    save_report as write_report,
+)
 
 PLAYBOOKS = {
     "ssh-bruteforce": {
@@ -49,24 +67,24 @@ def generate_plan(scenario: str) -> dict:
     if not book:
         raise ValueError(f"Unknown scenario '{scenario}'. Available: {', '.join(PLAYBOOKS.keys())}")
 
-    return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "scenario": key,
-        "title": book["title"],
-        "steps": book["steps"],
-    }
+    return build_report(
+        "incident_plan",
+        summary=f"Generated {len(book['steps'])}-step response plan for '{key}'",
+        scenario=key,
+        title=book["title"],
+        steps=list(book["steps"]),
+    )
 
 
-def save_plan(plan: dict, output_dir: str = "reports") -> str:
-    os.makedirs(output_dir, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(output_dir, f"incident_plan_{plan['scenario']}_{stamp}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(plan, f, indent=2)
-    return path
+def save_plan(plan: dict, output_dir: str | None = None) -> str:
+    return write_report(
+        plan,
+        output_dir,
+        prefix=f"incident_plan_{plan['scenario']}",
+    )
 
 
-def print_plan(plan: dict, report_path: str):
+def print_plan(plan: dict, report_path: str) -> None:
     print("\n================ INCIDENT & HARDENING PLAN ================")
     print(f"Scenario : {plan['scenario']}")
     print(f"Title    : {plan['title']}\n")
@@ -76,21 +94,54 @@ def print_plan(plan: dict, report_path: str):
     print("===========================================================\n")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 incident_plan.py <scenario>")
-        print("Scenarios: " + ", ".join(PLAYBOOKS.keys()))
-        sys.exit(1)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="incident_plan.py",
+        description="Generate a structured containment, investigation and hardening checklist.",
+        epilog="Example: python3 incident_plan.py ssh-bruteforce",
+    )
+    parser.add_argument(
+        "scenario",
+        nargs="?",
+        help="playbook to generate: " + ", ".join(PLAYBOOKS),
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="list available scenarios and exit",
+    )
+    add_output_dir_arg(parser)
+    add_json_arg(parser)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.list:
+        for key, book in PLAYBOOKS.items():
+            print(f"  {key:<16} {book['title']}")
+        return 0
+    if not args.scenario:
+        parser.error("a scenario is required (use --list to see available scenarios)")
 
     try:
-        plan = generate_plan(sys.argv[1])
+        plan = generate_plan(args.scenario)
+        report_path = save_plan(plan, args.output_dir)
     except ValueError as exc:
-        print(f"[ERROR] {exc}")
-        sys.exit(1)
+        print_error(str(exc))
+        return 1
+    except OSError as exc:
+        print_error(f"could not write plan: {exc}")
+        return 1
 
-    report_path = save_plan(plan)
-    print_plan(plan, report_path)
+    if args.json:
+        print(json.dumps(plan, indent=2))
+    else:
+        print_plan(plan, report_path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

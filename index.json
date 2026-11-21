@@ -27,6 +27,11 @@
       "id": "android-workspace-guard",
       "file": "skills/android-workspace-guard.md",
       "script": "monitors/android/android_guard.py"
+    },
+    {
+      "id": "incident-response-playbook",
+      "file": "skills/incident-response-playbook.md",
+      "script": "tools/incident_plan.py"
     }
   ]
 }

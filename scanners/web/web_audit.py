@@ -1,12 +1,30 @@
+"""Audit HTTP security headers, TLS settings, cookies and server banners."""
+
+from __future__ import annotations
+
+import argparse
 import json
-import os
 import socket
 import ssl
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlparse
+
+_REPO_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "common.py").is_file()),
+    Path(__file__).resolve().parent,
+)
+sys.path.insert(0, str(_REPO_ROOT))
+
+from common import (  # noqa: E402
+    add_json_arg,
+    add_output_dir_arg,
+    build_report,
+    print_error,
+    save_report as write_report,
+)
 
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "Enforces HTTPS and protects against protocol downgrade/MITM.",
@@ -67,6 +85,8 @@ def analyze_cookies(raw_cookies: list[str]) -> list[dict]:
 
 
 def audit_target(target: str) -> dict:
+    if not target or not target.strip():
+        raise ValueError("target must be a non-empty URL or hostname")
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
 
@@ -119,34 +139,35 @@ def audit_target(target: str) -> dict:
 
     score = len(present_headers)
     max_score = len(SECURITY_HEADERS)
+    summary = (
+        f"Audited {final_url}: {score}/{max_score} security headers present, "
+        f"{len(missing_headers)} missing"
+    )
+    if fetch_error:
+        summary += f"; fetch failed: {fetch_error}"
 
-    return {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "input_target": target,
-        "final_url": final_url,
-        "http_status": status_code,
-        "fetch_error": fetch_error,
-        "is_https": final_url.startswith("https://"),
-        "header_score": f"{score}/{max_score}",
-        "present_headers": present_headers,
-        "missing_headers": missing_headers,
-        "exposed_banners": exposed_banners,
-        "cookies": cookies_audit,
-        "tls": tls_info,
-    }
-
-
-def save_report(report: dict, output_dir: str = "reports") -> str:
-    os.makedirs(output_dir, exist_ok=True)
-    host = urlparse(report["final_url"]).hostname or "target"
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(output_dir, f"web_audit_{host}_{stamp}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-    return path
+    return build_report(
+        "web_audit",
+        summary=summary,
+        input_target=target,
+        final_url=final_url,
+        http_status=status_code,
+        fetch_error=fetch_error,
+        is_https=final_url.startswith("https://"),
+        header_score=f"{score}/{max_score}",
+        present_headers=present_headers,
+        missing_headers=missing_headers,
+        exposed_banners=exposed_banners,
+        cookies=cookies_audit,
+        tls=tls_info,
+    )
 
 
-def print_summary(report: dict, report_path: str):
+def save_report(report: dict, output_dir: str | None = None) -> str:
+    return write_report(report, output_dir, prefix="web_audit")
+
+
+def print_summary(report: dict, report_path: str) -> None:
     print("\n================ WEB SECURITY AUDIT ================")
     print(f"Target       : {report['final_url']}")
     print(f"HTTP Status  : {report['http_status']}")
@@ -176,30 +197,48 @@ def print_summary(report: dict, report_path: str):
     if not report["exposed_banners"]:
         print("None detected.")
     else:
-        for k, v in report["exposed_banners"].items():
-            print(f"[!] {k}: {v}")
+        for key, value in report["exposed_banners"].items():
+            print(f"[!] {key}: {value}")
 
     print("\n--- Cookie Flags ---")
     if not report["cookies"]:
         print("No Set-Cookie headers observed.")
     else:
-        for c in report["cookies"]:
-            status = "OK" if not c["issues"] else ", ".join(c["issues"])
-            print(f"  * {c['name']}: {status}")
+        for cookie in report["cookies"]:
+            status = "OK" if not cookie["issues"] else ", ".join(cookie["issues"])
+            print(f"  * {cookie['name']}: {status}")
 
     print(f"\nReport saved : {report_path}")
     print("====================================================\n")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 web_audit.py <url_or_domain>")
-        sys.exit(1)
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="web_audit.py",
+        description="Audit HTTP headers, TLS/certificate details, cookie flags and server banners.",
+        epilog="Example: python3 web_audit.py https://example.com",
+    )
+    parser.add_argument("target", help="URL or hostname to audit")
+    add_output_dir_arg(parser)
+    add_json_arg(parser)
+    return parser
 
-    report = audit_target(sys.argv[1])
-    report_path = save_report(report)
-    print_summary(report, report_path)
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        report = audit_target(args.target)
+        report_path = save_report(report, args.output_dir)
+    except (ValueError, OSError) as exc:
+        print_error(str(exc))
+        return 1
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print_summary(report, report_path)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
